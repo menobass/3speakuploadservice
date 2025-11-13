@@ -40,6 +40,11 @@ class JobService {
         input: {
           uri: gatewayUrl,
           size: fileSize
+        },
+        // Initialize progress structure that encoder nodes expect
+        progress: {
+          download_pct: 0,
+          pct: 0
         }
       });
       
