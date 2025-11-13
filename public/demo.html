@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3Speak Upload Demo - Reference Implementation</title>
+    <link rel="stylesheet" href="css/demo.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="demo-header">
+        <div class="container">
+            <img src="/images/snapie-3speak.png" alt="Snapie 3Speak" class="header-mascot">
+            <h1>🎬 3Speak Upload Demo</h1>
+            <p class="subtitle">Reference Implementation - Blueprint for 3speak.tv Integration</p>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        
+        <!-- Login Page -->
+        <div id="login-page" class="page-section">
+            <div class="card">
+                <h2>Login with Hive Keychain</h2>
+                <p class="info-text">
+                    This demo shows how video uploads should work on 3Speak.
+                    Login with your Hive account to test the upload flow.
+                </p>
+                
+                <!-- Keychain Status -->
+                <div id="keychain-status" class="status-message"></div>
+                
+                <!-- Login Form -->
+                <form id="login-form" class="login-form">
+                    <div class="form-group">
+                        <label for="username">Hive Username</label>
+                        <input 
+                            type="text" 
+                            id="username" 
+                            placeholder="your-hive-username"
+                            pattern="[a-z0-9\-]{3,16}"
+                            required
+                        >
+                        <small>Enter your Hive username (e.g., alice, bob-smith)</small>
+                    </div>
+                    
+                    <button type="submit" id="keychain-login-btn" class="btn btn-primary">
+                        🔑 Login with Keychain
+                    </button>
+                </form>
+                
+                <!-- Install Keychain Help -->
+                <div class="help-text">
+                    <strong>Don't have Hive Keychain?</strong>
+                    <br>
+                    <a href="https://hive-keychain.com" target="_blank">Install Hive Keychain Extension</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Page (Hidden until logged in) -->
+        <div id="upload-page" class="page-section hidden">
+            
+            <!-- User Info Banner -->
+            <div class="user-banner">
+                <span>Logged in as: <strong id="logged-user"></strong></span>
+                <button id="logout-btn" class="btn btn-small">Logout</button>
+            </div>
+
+            <!-- Upload Form -->
+            <div class="card">
+                <h2>Upload Your Video</h2>
+                
+                <form id="upload-form">
+                    <!-- Video File -->
+                    <div class="form-group">
+                        <label for="video-file">Video File *</label>
+                        <input 
+                            type="file" 
+                            id="video-file" 
+                            accept="video/*"
+                            required
+                        >
+                        <small>Supported formats: MP4, WebM, MOV, AVI</small>
+                    </div>
+
+                    <!-- Title -->
+                    <div class="form-group">
+                        <label for="video-title">Title *</label>
+                        <input 
+                            type="text" 
+                            id="video-title" 
+                            placeholder="My Awesome Video"
+                            maxlength="100"
+                            required
+                        >
+                    </div>
+
+                    <!-- Description -->
+                    <div class="form-group">
+                        <label for="video-description">Description *</label>
+                        <textarea 
+                            id="video-description" 
+                            rows="5"
+                            placeholder="Tell us about your video..."
+                            required
+                        ></textarea>
+                    </div>
+
+                    <!-- Tags -->
+                    <div class="form-group">
+                        <label for="video-tags">Tags</label>
+                        <input 
+                            type="text" 
+                            id="video-tags" 
+                            placeholder="travel, vlog, tutorial (comma-separated)"
+                        >
+                        <small>Separate tags with commas</small>
+                    </div>
+
+                    <!-- Thumbnail -->
+                    <div class="form-group">
+                        <label for="video-thumbnail">Thumbnail (Optional)</label>
+                        <input 
+                            type="file" 
+                            id="video-thumbnail" 
+                            accept="image/*"
+                        >
+                        <small>JPG or PNG recommended. Auto-generated if not provided.</small>
+                    </div>
+
+                    <!-- Community -->
+                    <div class="form-group">
+                        <label for="video-community">Community</label>
+                        <select id="video-community">
+                            <option value="">Select a community (optional)</option>
+                            <option value="hive-181335">Threespeak</option>
+                            <option value="hive-178315">Snapie</option>
+                        </select>
+                    </div>
+
+                    <!-- Decline Rewards -->
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="decline-rewards">
+                            <span>Decline Rewards (100% to null)</span>
+                        </label>
+                        <small>When enabled, post rewards will be declined and sent to null account</small>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" id="upload-btn" class="btn btn-primary btn-large">
+                        📤 Start Upload
+                    </button>
+                </form>
+            </div>
+
+            <!-- Progress Section (Hidden until upload starts) -->
+            <div id="progress-section" class="card hidden">
+                <h3>Upload Progress</h3>
+                
+                <!-- Current Status -->
+                <div id="current-status" class="status-display">
+                    <span class="status-label">Status:</span>
+                    <span id="status-text" class="status-value">Preparing...</span>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="progress-container">
+                    <div id="progress-bar" class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <div id="progress-percentage" class="progress-text">0%</div>
+                </div>
+
+                <!-- Detailed Status Messages -->
+                <div id="status-messages" class="status-messages"></div>
+
+                <!-- Video Link (Shown on completion) -->
+                <div id="completion-section" class="hidden">
+                    <div class="success-message">
+                        ✅ Video uploaded successfully!
+                    </div>
+                    <div class="video-info">
+                        <strong>Video ID:</strong> <span id="video-id"></span><br>
+                        <strong>Permlink:</strong> <span id="video-permlink"></span><br>
+                        <strong>IPFS Hash:</strong> <span id="video-ipfs"></span>
+                    </div>
+                    <button id="upload-another-btn" class="btn btn-primary">
+                        Upload Another Video
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="demo-footer">
+        <div class="container">
+            <p>
+                <strong>Developer Note:</strong> This is a reference implementation showing 
+                how 3Speak video uploads should work. Clone and adapt the code for production use.
+            </p>
+            <p class="tech-info">
+                Tech Stack: Vanilla JS • Hive Keychain • TUS Protocol • Real-time Progress Tracking
+            </p>
+            <p class="built-by">
+                Built for 3speak and Hive with love by <a href="https://peakd.com/@meno" target="_blank">@meno</a> ❤️
+            </p>
+        </div>
+    </footer>
+
+    <!-- Load Hive Keychain Extension -->
+    <script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js@latest/dist/hive.min.js"></script>
+    
+    <!-- TUS Upload Client -->
+    <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
+    
+    <!-- Demo Application Scripts -->
+    <script src="js/keychain-auth.js"></script>
+    <script src="js/upload-client.js"></script>
+    <script src="js/demo-app.js"></script>
+</body>
+</html>

@@ -1,0 +1,398 @@
+# 3Speak Simplified Upload Service
+
+## Overview
+
+A minimal upload service that bypasses the legacy gateway by directly injecting video entries and encoding jobs into MongoDB. Uses token authentication, TUS resumable uploads, and piggybacks on existing 3Speak infrastructure.
+
+### Key Features
+- **Single Token Authentication**: Simple Bearer token for API access
+- **TUS Integration**: Resumable uploads with existing TUS server
+- **Direct MongoDB Injection**: Creates video entries and encoder jobs directly
+- **Zero Encoder Changes**: Works with existing distributed encoder system
+- **IPFS Supercluster Integration**: Uploads to existing 3Speak IPFS infrastructure
+
+---
+
+## Architecture
+
+```
+Frontend → Upload Service → TUS Server → IPFS Upload → MongoDB (Videos + Jobs) → Encoders Poll Jobs
+```
+
+### Flow:
+1. Frontend authenticates with Bearer token
+2. Service creates video entry in `threespeak.videos`
+3. TUS handles resumable upload to temp storage  
+4. Callback uploads file directly to 3Speak IPFS supernode (65.21.201.94:5002)
+5. Service creates encoding job with IPFS URL in `spk-encoder-gateway.jobs`
+6. Temp file deleted immediately (zero local storage!)
+7. Existing encoders poll and process jobs normally
+8. Existing systems handle status updates and completion
+
+---
+
+## Environment Configuration
+
+Create `.env` file:
+
+```bash
+# Server Configuration
+PORT=8080                    # Configurable port (3000-3001 taken)
+NODE_ENV=production
+
+# Authentication
+UPLOAD_SECRET_TOKEN=your-super-secret-upload-token-here
+
+# MongoDB Configuration  
+MONGO_URI=mongodb://username:password@host:port/threespeak
+ENCODER_MONGO_URI=mongodb://username:password@host:port/spk-encoder-gateway
+
+# 3Speak IPFS Supernode Configuration (Direct Upload)
+IPFS_SUPERNODE_URL=http://65.21.201.94:5002    # 3Speak IPFS supernode endpoint
+# Note: No authentication needed for supernode
+
+# Fallback IPFS Configuration (Local Node)
+IPFS_FALLBACK_URL=http://localhost:5001              # Local Kubo daemon for fallback
+IPFS_FALLBACK_GATEWAY=https://ipfs.yourdomain.com    # Public gateway domain for encoders
+IPFS_FALLBACK_PORT=8080                              # Local IPFS gateway port
+
+# Cleanup Configuration  
+CLEANUP_SCHEDULE_CRON=0 2 * * *                # Daily at 2 AM
+CLEANUP_RETENTION_DAYS=7                        # Keep files for 7 days minimum
+
+# TUS Configuration
+TUS_UPLOAD_PATH=/tmp/uploads  # Temp storage path
+TUS_ENDPOINT=http://localhost:1080/files  # Your existing TUS server
+
+# 3Speak Infrastructure
+THREESPEAK_IPFS_GATEWAY=https://ipfs.3speak.tv
+```
+
+---
+
+## MongoDB Schemas
+
+### Videos Collection (`threespeak.videos`)
+
+Required fields for 3Speak compatibility:
+
+```javascript
+{
+  // Core Identity
+  _id: ObjectId,
+  owner: String,              // Hive username
+  permlink: String,           // Unique 8-char identifier
+  
+  // Upload Service Tracking
+  upload_service_id: String,  // Identifies videos created by this service
+  fallback_mode: Boolean,     // TRUE if uploaded to local IPFS (fallback)
+  cleanup_eligible: Boolean,  // TRUE when ready for local file cleanup
+  
+  // Video Metadata  
+  title: String,
+  description: String,
+  tags: String,               // Comma-separated
+  tags_v2: [String],          // Array format
+  thumbnail: String,          // "ipfs://hash"
+  
+  // File Information
+  originalFilename: String,
+  filename: String,           // "ipfs://hash" (raw video)
+  video_v2: String,          // "ipfs://hash/manifest.m3u8" (encoded)
+  local_filename: String,    // Temp file path
+  size: Number,              // Bytes
+  duration: Number,          // Seconds
+  
+  // Upload & Encoding
+  upload_type: "ipfs",
+  status: "encoding_ipfs",   // Set immediately
+  job_id: String,           // UUID linking to encoder job
+  encoding_price_steem: "0.000",
+  encodingProgress: 0,
+  
+  // Publishing Configuration
+  publish_type: "publish",   // or "schedule"
+  community: String,
+  hive: String,             // Community ID like "hive-181335"
+  language: "en",
+  category: "general",
+  
+  // Beneficiaries & Rewards
+  beneficiaries: String,    // JSON array
+  declineRewards: Boolean,
+  rewardPowerup: Boolean,
+  votePercent: 1,
+  donations: Boolean,
+  
+  // Flags & Settings
+  isNsfwContent: Boolean,
+  is3CJContent: Boolean,
+  fromMobile: false,        // Always false for this service
+  firstUpload: Boolean,
+  
+  // Timestamps
+  created: Date,
+  
+  // Status Tracking  
+  needsHiveUpdate: Boolean,
+  steemPosted: Boolean,
+  indexed: Boolean,
+  upvoteEligible: Boolean,
+  
+  // Legacy Fields (keep for compatibility)
+  encoding: {
+    "360": false,
+    "480": false, 
+    "720": false,
+    "1080": false
+  },
+  updateSteem: false,
+  lowRc: false,
+  needsBlockchainUpdate: false,
+  paid: false,
+  isVOD: false,
+  postToHiveBlog: false,
+  reducedUpvote: false,
+  __v: 0
+}
+```
+
+### Jobs Collection (`spk-encoder-gateway.jobs`)
+
+```javascript
+{
+  _id: ObjectId,
+  id: String,                // UUID (generated by service)
+  
+  // Job Metadata
+  created_at: Date,
+  status: "queued",         // Initial status
+  start_date: null,
+  last_pinged: null,
+  completed_at: null,
+  assigned_to: null,        // DID - filled by encoder
+  assigned_date: null,
+  
+  // Video Linking
+  metadata: {
+    video_owner: String,    // Same as video.owner
+    video_permlink: String  // Same as video.permlink
+  },
+  
+  // Storage Metadata
+  storageMetadata: {
+    app: "3speak",
+    key: "owner/permlink/video",
+    type: "video"
+  },
+  
+  // Input File
+  input: {
+    uri: String,           // "https://ipfs.3speak.tv/ipfs/hash"
+    size: Number           // File size in bytes
+  },
+  
+  // Results (filled by encoder)
+  result: null,
+  progress: null
+}
+```
+
+---
+
+## API Endpoints
+
+### Authentication
+All endpoints require `Authorization: Bearer <UPLOAD_SECRET_TOKEN>` header.
+
+### 1. Prepare Upload
+
+**POST /api/upload/prepare**
+
+Creates video entry and returns upload information.
+
+**Request Body:**
+```json
+{
+  "owner": "username",
+  "title": "Video Title",
+  "description": "Video description...",
+  "tags": ["tag1", "tag2", "tag3"],
+  "duration": 120.5,
+  "size": 50000000,
+  "originalFilename": "video.mp4",
+  "community": "hive-181335",
+  "thumbnail_base64": "data:image/jpeg;base64,/9j/4AAQ..." // Optional
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "video_id": "mongodb_object_id",
+    "permlink": "abcdefgh",
+    "tus_endpoint": "http://localhost:1080/files",
+    "metadata": {
+      "video_id": "mongodb_object_id",
+      "owner": "username",
+      "permlink": "abcdefgh"
+    }
+  }
+}
+```
+
+**Logic:**
+1. Generate random 8-char permlink
+2. Process thumbnail (if provided) → upload to IPFS
+3. Create video document with status "uploaded"
+4. Return TUS upload endpoint with metadata
+
+### 2. TUS Upload Callback
+
+**POST /api/upload/tus-callback**
+
+Called by TUS server when upload completes.
+
+**Request Body:**
+```json
+{
+  "Upload": {
+    "ID": "upload_id",
+    "Storage": {
+      "Path": "/tmp/uploads/filename"
+    },
+    "MetaData": {
+      "video_id": "mongodb_object_id",
+      "owner": "username", 
+      "permlink": "abcdefgh"
+    }
+  }
+}
+```
+
+**Response:** 
+```json
+{
+  "success": true
+}
+```
+
+**Logic:**
+1. Upload file from temp path to IPFS supercluster
+2. Update video document:
+   - `filename: "ipfs://hash"`
+   - `status: "encoding_ipfs"` 
+   - `local_filename: null` (cleanup)
+3. Create encoder job in `spk-encoder-gateway.jobs`
+4. Delete temp file
+
+### 3. Video Status
+
+**GET /api/video/:id/status**
+
+Returns current video and job status.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "video": {
+      "status": "encoding_ipfs",
+      "encodingProgress": 45,
+      "created": "2025-11-10T13:18:42.817Z"
+    },
+    "job": {
+      "status": "running", 
+      "assigned_to": "did:key:z6Mkk...",
+      "progress": {
+        "pct": 45.2
+      }
+    }
+  }
+}
+```
+
+### 4. List Videos
+
+**GET /api/videos**
+
+**Query Parameters:**
+- `owner` (required): Username
+- `status` (optional): Filter by status
+- `limit` (optional): Max results (default 20)
+- `offset` (optional): Pagination offset
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "videos": [...],
+    "total": 42,
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+---
+
+## Hardware Requirements & Hosting
+
+### 🏆 **Recommended: OVH VPS**
+
+**Perfect hosting option:** OVH VPS servers are ideal for this service!
+
+| **OVH Plan** | **RAM** | **Storage** | **Price** | **Suitability** |
+|--------------|---------|-------------|-----------|-----------------|
+| **VPS SSD 1** | 8GB | 160GB SSD | ~€12/month | ✅ **Perfect for testing** |
+| **VPS SSD 2** | 16GB | 320GB SSD | ~€20/month | ✅ **Production ready** |  
+| **VPS SSD 3** | 32GB | 640GB SSD | ~€30/month | ✅ **High volume production** |
+
+### 💰 **Cost Analysis (Monthly)**
+
+```
+OVH VPS SSD 2 (16GB/320GB):     €20 (~$22)
+Domain (.com):                  €1  (~$1) 
+SSL Certificate:                €0  (Let's Encrypt)
+--------------------------------
+Total Monthly Cost:             €21 (~$23)
+```
+
+**Compared to AWS/DigitalOcean**: 40-60% cheaper! 🎯
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**1. IPFS Supernode Upload Failures**  
+- Verify supernode connectivity: `curl http://65.21.201.94:5002/api/v0/id`
+- Check supernode health and repo stats
+- Monitor network connectivity to 65.21.201.94:5002
+
+**2. Database Connection Issues**
+- Verify MongoDB credentials
+- Check network connectivity
+- Monitor connection pool
+
+**3. TUS Callback Failures**
+- Verify callback URL is accessible
+- Check TUS hook script permissions
+- Monitor temp file cleanup
+
+**4. Job Creation Issues**
+- Verify encoder database connectivity
+- Check job schema compatibility
+- Monitor job queue for stuck jobs
+
+### Debug Mode
+Set `NODE_ENV=development` for verbose logging and error details.
+
+---
+
+*Generated: November 12, 2025*
