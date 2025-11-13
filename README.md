@@ -83,10 +83,10 @@ Open browser to: **http://localhost:8080/demo.html**
 
 ## 📖 Documentation
 
-- **[🚀 Developer Implementation Guide](docs/DEVELOPER_IMPLEMENTATION_GUIDE.md)** - **START HERE** - Complete deployment guide for 3Speak developers (30 min setup)
+- **[🎯 Frontend API Integration](docs/FRONTEND_API_INTEGRATION.md)** - **START HERE for 3Speak devs** - How to integrate with the hosted API service
 - **[Complete Specification](docs/3SPEAK_SPECIFICATION.md)** - Full technical spec
 - **[Video Schema Reference](docs/VIDEO_SCHEMA_REFERENCE.md)** - MongoDB schema details
-- **[Local Setup Guide](docs/LOCAL_SETUP.md)** - Detailed setup instructions
+- **[Local Setup Guide](docs/LOCAL_SETUP.md)** - Detailed local development setup
 - **[Legacy Compatibility](docs/LEGACY_COMPATIBILITY_FIXES.md)** - Schema compatibility notes
 
 ## 🔌 API Endpoints
