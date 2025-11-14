@@ -62,7 +62,7 @@ if [[ -n "$VIDEO_ID" ]]; then
     
     # Call our own API to get video details
     VIDEO_INFO=$(curl -s -X GET "http://localhost:8080/api/upload/video/$VIDEO_ID/status" \
-        -H "Authorization: Bearer your-super-secret-upload-token-here-change-this-in-production" 2>/dev/null)
+        -H "Authorization: Bearer gJTe63FNQ7a" 2>/dev/null)
     
     if [[ $? -eq 0 && -n "$VIDEO_INFO" ]]; then
         # Extract owner and permlink from the response
