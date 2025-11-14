@@ -17,7 +17,8 @@ class IPFSService {
   }
 
   /**
-   * Upload file to IPFS with fallback strategy
+   * Upload file to IPFS - LOCAL FIRST strategy
+   * Pins to local IPFS node immediately (fast), then syncs to supernode in background
    * @param {string} filePath - Path to file to upload
    * @returns {Promise<{hash: string, fallbackMode: boolean, gatewayUrl: string}>}
    */
@@ -26,30 +27,94 @@ class IPFSService {
       throw new Error(`File not found: ${filePath}`);
     }
 
-    // Try primary supernode first
+    // INVERTED STRATEGY: Pin locally FIRST (instant, reliable)
     try {
-      const result = await this._uploadToSupernode(filePath);
-      console.log(`✅ Uploaded to supernode: ${result.hash}`);
+      const result = await this._uploadToLocal(filePath);
+      console.log(`✅ Pinned locally: ${result.hash}`);
+      
+      // Background sync to supernode (fire and forget - not critical path)
+      this._syncToSupernodeBackground(filePath, result.hash).catch(err => {
+        console.warn(`⚠️ Background supernode sync failed (non-critical): ${err.message}`);
+      });
+      
       return {
         hash: result.hash,
-        fallbackMode: false,
-        gatewayUrl: `${this.primaryGateway}/ipfs/${result.hash}`
+        fallbackMode: false, // Local is now PRIMARY
+        gatewayUrl: `${this.primaryGateway}/ipfs/${result.hash}` // Encoders will fetch via DHT
       };
-    } catch (supernodeError) {
-      console.error(`❌ Supernode upload failed: ${supernodeError.message}`);
+    } catch (localError) {
+      console.error(`❌ Local IPFS pin failed: ${localError.message}`);
       
-      // Fallback to local IPFS
+      // Fallback to direct supernode upload (old behavior)
       try {
-        const result = await this._uploadToFallback(filePath);
-        console.log(`⚠️ Fallback upload successful: ${result.hash}`);
+        const result = await this._uploadToSupernode(filePath);
+        console.log(`⚠️ Supernode direct upload successful: ${result.hash}`);
         return {
           hash: result.hash,
           fallbackMode: true,
-          gatewayUrl: `${this.fallbackGateway}/ipfs/${result.hash}`
+          gatewayUrl: `${this.primaryGateway}/ipfs/${result.hash}`
         };
-      } catch (fallbackError) {
-        throw new Error(`Both uploads failed. Supernode: ${supernodeError.message}, Fallback: ${fallbackError.message}`);
+      } catch (supernodeError) {
+        throw new Error(`Both uploads failed. Local: ${localError.message}, Supernode: ${supernodeError.message}`);
       }
+    }
+  }
+
+  /**
+   * Upload to LOCAL IPFS node (fast, reliable)
+   * @private
+   */
+  async _uploadToLocal(filePath) {
+    const form = new FormData();
+    const fileName = path.basename(filePath);
+    form.append('file', fs.createReadStream(filePath), fileName);
+    
+    const response = await axios.post(`${this.fallbackUrl}/api/v0/add`, form, {
+      headers: { ...form.getHeaders() },
+      params: {
+        'wrap-with-directory': false,
+        'recursive': false,
+        'pin': true // Pin locally so encoders can fetch via DHT
+      },
+      timeout: 120000, // 2 minutes - local should be fast
+      maxContentLength: 8 * 1024 * 1024 * 1024,
+      maxBodyLength: 8 * 1024 * 1024 * 1024
+    });
+    
+    console.log('📊 Local IPFS response:', response.data);
+    
+    // Handle different response formats
+    if (typeof response.data === 'object' && response.data.Hash) {
+      return { hash: response.data.Hash };
+    }
+    
+    let responseText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+    const lines = responseText.trim().split('\n');
+    const result = JSON.parse(lines[lines.length - 1]);
+    
+    if (!result.Hash) {
+      throw new Error('No hash returned from local IPFS');
+    }
+    
+    return { hash: result.Hash };
+  }
+
+  /**
+   * Background sync to supernode (non-blocking)
+   * @private
+   */
+  async _syncToSupernodeBackground(filePath, expectedHash) {
+    console.log(`🔄 Background: Syncing ${expectedHash} to supernode...`);
+    try {
+      const result = await this._uploadToSupernode(filePath);
+      if (result.hash === expectedHash) {
+        console.log(`✅ Background: Supernode sync complete for ${expectedHash}`);
+      } else {
+        console.warn(`⚠️ Background: Hash mismatch! Local: ${expectedHash}, Supernode: ${result.hash}`);
+      }
+    } catch (error) {
+      console.error(`❌ Background: Supernode sync failed for ${expectedHash}:`, error.message);
+      // Don't throw - this is non-critical background operation
     }
   }
 

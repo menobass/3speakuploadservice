@@ -4,7 +4,7 @@ const ipfsService = require('./ipfs');
 class CleanupService {
   constructor() {
     this.serviceId = process.env.UPLOAD_SERVICE_ID || 'simplified-upload-service';
-    this.retentionDays = parseInt(process.env.CLEANUP_RETENTION_DAYS) || 7;
+    this.retentionDays = parseInt(process.env.CLEANUP_RETENTION_DAYS) || 1; // 24 hours for raw files
     this.isSchedulerRunning = false;
     this.scheduledTask = null;
     
@@ -139,9 +139,9 @@ class CleanupService {
 
     return this.Video.find({
       upload_service_id: this.serviceId,
-      fallback_mode: true,           // Only cleanup fallback uploads
-      status: 'published',           // Must be successfully published
-      created: { $lt: cutoffDate },  // Older than retention period
+      fallback_mode: false,          // Cleanup LOCAL pins (new strategy)
+      status: { $in: ['encoding_ipfs', 'encoding_ready', 'published'] }, // Encoding started or complete
+      created: { $lt: cutoffDate },  // Older than retention period (24h for raw files)
       cleanup_eligible: { $ne: true } // Not already cleaned
     }).select('_id owner permlink filename fallback_mode created status size');
   }
