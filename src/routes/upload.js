@@ -373,10 +373,70 @@ router.post('/tus-callback', async (req, res) => {
       });
     }
 
+    // Create idempotency marker BEFORE starting IPFS upload
+    // This prevents race condition when TUS hook retries
+    const idempotencyKey = `${owner}_${permlink}_${video_id}`;
+    const marker = await Job.findOneAndUpdate(
+      { 
+        'metadata.video_owner': owner,
+        'metadata.video_permlink': permlink,
+        status: 'idempotency_lock' // Special status for locking
+      },
+      { 
+        $setOnInsert: {
+          id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          status: 'idempotency_lock',
+          metadata: {
+            video_owner: owner,
+            video_permlink: permlink,
+            video_id: video_id,
+            locked_at: new Date(),
+            tus_upload_id: ID
+          }
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    // If we didn't create the lock, another request is processing this
+    if (marker && marker.metadata.tus_upload_id !== ID) {
+      console.log(`⚠️ Another TUS callback already processing ${owner}/${permlink}`);
+      
+      // Clean up temp file
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`🗑️ Cleaned up duplicate upload temp file: ${filePath}`);
+        }
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to cleanup duplicate temp file: ${cleanupError.message}`);
+      }
+      
+      return res.json({ 
+        success: true,
+        message: 'Video upload already being processed',
+        duplicate_request: true
+      });
+    }
+
+    console.log(`🔒 Acquired idempotency lock for ${owner}/${permlink}`);
+
     // Upload with fallback strategy
-    const uploadResult = await ipfsService.uploadFile(filePath);
+    let uploadResult;
+    try {
+      uploadResult = await ipfsService.uploadFile(filePath);
+    } catch (uploadError) {
+      // IPFS upload failed - remove the lock
+      await Job.deleteOne({ 
+        'metadata.video_owner': owner,
+        'metadata.video_permlink': permlink,
+        status: 'idempotency_lock'
+      });
+      console.error(`❌ IPFS upload failed, lock released for ${owner}/${permlink}`);
+      throw uploadError;
+    }
     
-    console.log(`📋 Creating encoding job...`);
+    console.log(`📋 Creating encoding job (replacing lock)...`);
     
     // Create encoding job with appropriate gateway URL
     const jobId = await jobService.createEncodingJob(
@@ -385,6 +445,14 @@ router.post('/tus-callback', async (req, res) => {
       video.size, 
       uploadResult.gatewayUrl
     );
+    
+    // Remove the idempotency lock now that real job exists
+    await Job.deleteOne({ 
+      'metadata.video_owner': owner,
+      'metadata.video_permlink': permlink,
+      status: 'idempotency_lock'
+    });
+    console.log(`🔓 Idempotency lock removed, real job created: ${jobId}`);
     
     // Update video document
     video.filename = `ipfs://${uploadResult.hash}`;

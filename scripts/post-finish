@@ -5,7 +5,7 @@
 
 # Configuration
 CALLBACK_URL="http://localhost:8080/api/upload/tus-callback"
-TIMEOUT=30
+TIMEOUT=600
 UPLOAD_DIR="/tmp/uploads"
 
 # Log function
