@@ -236,12 +236,18 @@ router.post('/prepare',
 
       console.log(`✅ Video entry created: ${video._id} (${owner}/${video.permlink})`);
 
+      // Build TUS endpoint based on request protocol/host
+      // If accessed via HTTPS domain, return HTTPS TUS endpoint
+      const protocol = req.protocol; // 'http' or 'https'
+      const host = req.get('host'); // 'video.3speak.tv' or 'localhost:8080'
+      const tusEndpoint = `${protocol}://${host}/files`;
+
       res.json({
         success: true,
         data: {
           video_id: video._id.toString(),
           permlink: video.permlink,
-          tus_endpoint: process.env.TUS_ENDPOINT,
+          tus_endpoint: tusEndpoint,
           metadata: {
             video_id: video._id.toString(),
             owner: video.owner,
