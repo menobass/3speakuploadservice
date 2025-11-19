@@ -75,6 +75,11 @@ app.use(cors({
       'https://3speak.co'
     ];
     
+    // Allow any Vercel deployment (for development/testing)
+    if (origin && origin.includes('.vercel.app')) {
+      return callback(null, true);
+    }
+    
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
