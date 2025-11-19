@@ -72,7 +72,8 @@ app.use(cors({
     const allowedOrigins = [
       'https://video.3speak.tv',
       'https://3speak.tv', 
-      'https://3speak.co'
+      'https://3speak.co',
+      'https://beta.3speak.tv'
     ];
     
     // Allow any Vercel deployment (for development/testing)
