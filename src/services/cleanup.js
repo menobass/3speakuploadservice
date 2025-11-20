@@ -4,7 +4,7 @@ const ipfsService = require('./ipfs');
 class CleanupService {
   constructor() {
     this.serviceId = process.env.UPLOAD_SERVICE_ID || 'simplified-upload-service';
-    this.retentionDays = parseInt(process.env.CLEANUP_RETENTION_DAYS) || 1; // 24 hours for raw files
+    this.retentionDays = parseFloat(process.env.CLEANUP_RETENTION_DAYS) || 0.25; // 6 hours for raw files
     this.isSchedulerRunning = false;
     this.scheduledTask = null;
     
@@ -28,7 +28,7 @@ class CleanupService {
       return;
     }
 
-    const schedule = process.env.CLEANUP_SCHEDULE_CRON || '0 2 * * *'; // Daily at 2 AM
+    const schedule = process.env.CLEANUP_SCHEDULE_CRON || '0 */6 * * *'; // Every 6 hours
     
     console.log(`📅 Scheduling cleanup: ${schedule} (retention: ${this.retentionDays} days)`);
     
