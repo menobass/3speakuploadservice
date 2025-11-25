@@ -12,6 +12,52 @@ const { requireAuth, uploadLimiter, authLimiter } = require('../middleware/auth'
 const router = express.Router();
 
 // ============================================
+// CONTENT CREATOR VERIFICATION
+// ============================================
+const getContentCreatorModel = () => {
+  return require('../models/ContentCreator')();
+};
+
+/**
+ * Middleware: Check if user can upload
+ * - Creates content creator if doesn't exist
+ * - Blocks banned users
+ * - Blocks users with canUpload: false
+ */
+const checkContentCreator = async (req, res, next) => {
+  try {
+    const { owner } = req.body;
+    
+    if (!owner) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username (owner) is required'
+      });
+    }
+
+    const ContentCreator = getContentCreatorModel();
+    const permission = await ContentCreator.checkUploadPermission(owner);
+
+    if (!permission.canUpload) {
+      console.warn(`🚫 Upload blocked for ${owner}: ${permission.reason}`);
+      return res.status(403).json({
+        success: false,
+        error: permission.reason
+      });
+    }
+
+    console.log(`✅ Upload permission verified for ${owner}`);
+    next();
+  } catch (error) {
+    console.error('❌ Content creator check error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to verify upload permission'
+    });
+  }
+};
+
+// ============================================
 // MULTER CONFIGURATION FOR THUMBNAILS
 // ============================================
 const uploadDir = '/tmp/thumbnails';
@@ -164,6 +210,7 @@ router.post('/prepare',
   authLimiter, 
   uploadLimiter, 
   requireAuth, 
+  checkContentCreator,  // New: Verify user can upload
   upload.single('thumbnail'), 
   validatePrepareUpload, 
   async (req, res) => {
