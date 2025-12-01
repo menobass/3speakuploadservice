@@ -42,12 +42,29 @@ Copy the complete example below into your project.
 
 **Base URL:** `https://video.3speak.tv`
 
+### Traditional Flow (Current Method)
+
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/upload/prepare` | POST | Create video entry |
 | `/api/upload/thumbnail/:video_id` | POST | Upload thumbnail (optional) |
 | `/files` | TUS | Upload video (resumable) |
 | `/api/upload/video/:id/status` | GET | Get encoding status |
+
+### Upload-First Flow (NEW - Recommended)
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/upload/init` | POST | Initialize upload, get upload_id |
+| `/files` | TUS | Upload video immediately (resumable) |
+| `/api/upload/finalize` | POST | Create video entry after upload |
+| `/api/upload/video/:id/status` | GET | Get encoding status |
+
+**Why use Upload-First?**
+- ✅ Better UX: Upload starts immediately when file selected
+- ✅ User can fill form while video uploads
+- ✅ Submit button enabled only when upload completes (safety)
+- ✅ No waiting after clicking "Submit"
 
 ---
 

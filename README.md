@@ -8,6 +8,7 @@ A production-ready, streamlined upload service for 3Speak that bypasses the lega
 
 - ✅ **Single Token Authentication** - Simple bearer token or Hive username auth
 - ✅ **TUS Resumable Uploads** - Large file support with resume capability
+- ✅ **Upload-First Flow** - NEW! Upload starts immediately when file selected
 - ✅ **Direct MongoDB Integration** - Bypasses legacy gateway completely
 - ✅ **IPFS Supernode Upload** - Direct to 3Speak supercluster (65.21.201.94:5002)
 - ✅ **Auto-Encoding & Auto-Publish** - Automatic job creation and Hive publishing
@@ -18,6 +19,7 @@ A production-ready, streamlined upload service for 3Speak that bypasses the lega
 - ✅ **Zero Local Storage** - Immediate cleanup after IPFS upload
 - ✅ **Production Security** - Rate limiting, validation, error handling
 - ✅ **Duplicate Job Prevention** - Race condition protection
+- ✅ **Dual Upload Methods** - Traditional (form-first) and Upload-First flows
 
 ## 📋 Prerequisites
 
@@ -84,23 +86,21 @@ Open browser to: **http://localhost:8080/demo.html**
 ## 📖 Documentation
 
 - **[🎯 Frontend API Integration](docs/FRONTEND_API_INTEGRATION.md)** - **START HERE for 3Speak devs** - How to integrate with the hosted API service
+- **[🚀 Upload-First Flow Guide](docs/UPLOAD_FIRST_GUIDE.md)** - **NEW!** Improved UX with immediate uploads
 - **[Complete Specification](docs/3SPEAK_SPECIFICATION.md)** - Full technical spec
 - **[Video Schema Reference](docs/VIDEO_SCHEMA_REFERENCE.md)** - MongoDB schema details
 - **[Local Setup Guide](docs/LOCAL_SETUP.md)** - Detailed local development setup
+- **[TUS Setup Guide](docs/TUSD-SETUP.md)** - TUS server systemd configuration
 - **[Legacy Compatibility](docs/LEGACY_COMPATIBILITY_FIXES.md)** - Schema compatibility notes
 
 ## 🔌 API Endpoints
 
-### Upload Flow
+### Traditional Upload Flow
 
 ```
 POST /api/upload/prepare
 ├─→ Creates video entry in MongoDB
 └─→ Returns video_id, permlink, metadata
-
-POST /api/upload/thumbnail/:video_id
-├─→ Uploads thumbnail to IPFS
-└─→ Updates video document
 
 TUS Upload → /files (port 1080)
 ├─→ Resumable upload via TUS protocol
@@ -112,6 +112,34 @@ TUS Upload → /files (port 1080)
 GET /api/upload/video/:id/status
 └─→ Real-time encoding status
 ```
+
+### Upload-First Flow (NEW)
+
+```
+POST /api/upload/init
+├─→ Creates temporary upload entry
+└─→ Returns upload_id, tus_endpoint
+
+TUS Upload → /files (port 1080)
+├─→ Upload starts immediately
+└─→ Marks temp entry as completed
+
+POST /api/upload/finalize
+├─→ Creates video entry with metadata
+├─→ Links to completed upload
+├─→ Uploads to IPFS supernode
+├─→ Creates encoding job
+└─→ Auto-publishes to Hive blockchain
+
+GET /api/upload/video/:id/status
+└─→ Real-time encoding status
+```
+
+**Why Upload-First?**
+- Upload starts when file selected (better UX)
+- User fills form while video uploads
+- Submit enabled only when upload complete (safety)
+- No waiting after clicking submit
 
 ### Authentication
 
@@ -131,10 +159,13 @@ curl -H "X-Hive-Username: yourusername" \
 
 The included demo (`/demo.html`) showcases:
 
+- ✅ **Method Tabs** - Switch between Traditional and Upload-First flows
 - ✅ Hive Keychain authentication
 - ✅ Form validation and metadata entry
 - ✅ Thumbnail upload (with default fallback)
 - ✅ Real-time TUS upload progress
+- ✅ **Upload-First UI** - Upload starts on file selection
+- ✅ **Submit Button Safety** - Disabled until upload completes
 - ✅ Live encoding status polling
 - ✅ Community selection (Threespeak, Snapie)
 - ✅ Decline rewards option
