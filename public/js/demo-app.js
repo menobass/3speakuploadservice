@@ -606,30 +606,35 @@ class DemoApp {
             // Step 3: Start TUS upload
             document.getElementById('upload-first-text').textContent = 'Uploading to server...';
             
-            await this.uploadClient.uploadVideo(
+            // Set the TUS endpoint for the upload client
+            this.uploadClient.tusEndpoint = initData.data.tus_endpoint;
+            
+            this.uploadClient.uploadVideo(
                 file,
-                initData.data.tus_endpoint,
                 {
                     upload_id: initData.data.upload_id
                 },
-                (bytesUploaded, bytesTotal) => {
-                    const percentage = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
+                (percentage, bytesUploaded, bytesTotal) => {
                     document.getElementById('upload-first-progress').style.width = percentage + '%';
                     document.getElementById('upload-first-percentage').textContent = percentage + '%';
                     document.getElementById('upload-first-text').textContent = 
                         `Uploading ${file.name} (${percentage}%)`;
+                },
+                () => {
+                    // Step 4: Upload complete - enable submit button
+                    console.log('TUS upload complete, enabling finalize button');
+                    
+                    statusDiv.classList.add('completed');
+                    document.getElementById('upload-first-text').textContent = '✅ Upload complete! Fill out the form and submit.';
+                    
+                    const finalizeBtn = document.getElementById('finalize-btn');
+                    finalizeBtn.disabled = false;
+                    finalizeBtn.textContent = '✅ Finalize Upload';
+                },
+                (error) => {
+                    throw error;
                 }
             );
-            
-            // Step 4: Upload complete - enable submit button
-            console.log('TUS upload complete, enabling finalize button');
-            
-            statusDiv.classList.add('completed');
-            document.getElementById('upload-first-text').textContent = '✅ Upload complete! Fill out the form and submit.';
-            
-            const finalizeBtn = document.getElementById('finalize-btn');
-            finalizeBtn.disabled = false;
-            finalizeBtn.textContent = '✅ Finalize Upload';
             
         } catch (error) {
             console.error('Upload-first start error:', error);

@@ -76,9 +76,11 @@ class UploadClient {
             metadata: {
                 filename: file.name,
                 filetype: file.type,
-                video_id: metadata.video_id,
-                owner: metadata.owner,
-                permlink: metadata.permlink
+                // Traditional flow uses video_id, upload-first uses upload_id
+                video_id: metadata.video_id || undefined,
+                upload_id: metadata.upload_id || undefined,
+                owner: metadata.owner || undefined,
+                permlink: metadata.permlink || undefined
             },
             onError: (error) => {
                 console.error('TUS upload failed:', error);
