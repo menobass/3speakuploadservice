@@ -203,6 +203,86 @@ const getJobModel = () => {
 // ============================================
 
 /**
+ * 0. INITIALIZE UPLOAD (UPLOAD-FIRST FLOW)
+ * Creates temporary upload entry before video metadata provided
+ * Returns upload_id and tus_endpoint for immediate upload
+ * Video entry created later in /finalize after TUS completes
+ */
+router.post('/init',
+  authLimiter,
+  uploadLimiter,
+  requireAuth,
+  checkContentCreator,
+  [
+    body('owner')
+      .isLength({ min: 3, max: 50 })
+      .matches(/^[a-z0-9.-]+$/)
+      .withMessage('Owner must be 3-50 characters, lowercase alphanumeric with dots and hyphens'),
+    body('originalFilename')
+      .isLength({ min: 1, max: 255 })
+      .withMessage('Filename required'),
+    body('size')
+      .isInt({ min: 1000 })
+      .withMessage('File size must be at least 1000 bytes'),
+    body('duration')
+      .isFloat({ min: 0.1 })
+      .withMessage('Duration must be at least 0.1 seconds')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          errors: errors.array()
+        });
+      }
+
+      const { owner, originalFilename, size, duration } = req.body;
+
+      // Generate unique upload ID
+      const crypto = require('crypto');
+      const upload_id = `${owner}_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+
+      console.log(`🚀 Initializing upload-first for ${owner}: ${originalFilename}`);
+
+      // Create temporary upload record
+      const TempUpload = require('../models/TempUpload')();
+      await TempUpload.createUpload({
+        upload_id,
+        owner,
+        originalFilename,
+        size,
+        duration
+      });
+
+      // Return TUS endpoint for immediate upload
+      const tusEndpoint = process.env.TUS_ENDPOINT || 'https://video.3speak.tv/files';
+
+      res.json({
+        success: true,
+        data: {
+          upload_id,
+          tus_endpoint: tusEndpoint,
+          expires_in: 3600 // 1 hour
+        }
+      });
+
+      console.log(`✅ Upload initialized: ${upload_id}`);
+
+    } catch (error) {
+      console.error('❌ Init upload error:', error);
+      res.status(500).json({
+        success: false,
+        error: process.env.NODE_ENV === 'production'
+          ? 'Failed to initialize upload'
+          : error.message
+      });
+    }
+  }
+);
+
+/**
  * 1. PREPARE UPLOAD
  * Creates video entry and returns upload information
  */
@@ -376,6 +456,7 @@ router.post('/prepare',
 /**
  * 2. TUS UPLOAD CALLBACK
  * Called by TUS server when upload completes
+ * Handles both traditional flow (video_id) and upload-first flow (upload_id)
  */
 router.post('/tus-callback', async (req, res) => {
   try {
@@ -389,36 +470,107 @@ router.post('/tus-callback', async (req, res) => {
     }
     
     const { ID, Storage, MetaData } = uploadData.Upload;
+    const filePath = Storage.Path;
     
-    if (!MetaData || !MetaData.video_id || !MetaData.owner || !MetaData.permlink) {
+    if (!MetaData) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required metadata'
+        error: 'Missing metadata'
+      });
+    }
+
+    // ============================================
+    // FLOW 1: TRADITIONAL (video_id in metadata)
+    // ============================================
+    if (MetaData.video_id) {
+      const { video_id, owner, permlink } = MetaData;
+      
+      if (!owner || !permlink) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing owner or permlink in metadata'
+        });
+      }
+
+      console.log(`📁 TUS callback (traditional) for ${owner}/${permlink}: ${filePath}`);
+
+      // Find video document
+      const Video = getVideoModel();
+      const video = await Video.findById(video_id);
+      if (!video) {
+        return res.status(404).json({
+          success: false,
+          error: 'Video not found'
+        });
+      }
+
+      // Verify file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          success: false,
+          error: 'Upload file not found'
+        });
+      }
+
+      // Continue with traditional processing...
+      // (existing IPFS upload and job creation code follows below)
+    }
+    
+    // ============================================
+    // FLOW 2: UPLOAD-FIRST (upload_id in metadata)
+    // ============================================
+    else if (MetaData.upload_id) {
+      const { upload_id } = MetaData;
+      
+      console.log(`📁 TUS callback (upload-first) for upload_id: ${upload_id}`);
+
+      // Find temporary upload
+      const TempUpload = require('../models/TempUpload')();
+      const tempUpload = await TempUpload.findOne({ upload_id });
+      
+      if (!tempUpload) {
+        return res.status(404).json({
+          success: false,
+          error: 'Upload not found'
+        });
+      }
+
+      // Verify file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          success: false,
+          error: 'Upload file not found'
+        });
+      }
+
+      // Mark TUS upload as completed
+      await TempUpload.markTusCompleted(upload_id, filePath);
+      
+      console.log(`✅ TUS upload marked complete for ${upload_id} - awaiting finalization`);
+      
+      // Return success - video entry will be created in /finalize
+      return res.json({ 
+        success: true,
+        message: 'Upload completed, awaiting finalization'
       });
     }
     
+    // ============================================
+    // ERROR: No valid flow identifier
+    // ============================================
+    else {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing video_id or upload_id in metadata'
+      });
+    }
+
+    // ============================================
+    // TRADITIONAL FLOW CONTINUES HERE
+    // ============================================
     const { video_id, owner, permlink } = MetaData;
-    const filePath = Storage.Path;
-
-    console.log(`📁 TUS callback for ${owner}/${permlink}: ${filePath}`);
-
-    // Find video document
     const Video = getVideoModel();
     const video = await Video.findById(video_id);
-    if (!video) {
-      return res.status(404).json({
-        success: false,
-        error: 'Video not found'
-      });
-    }
-
-    // Verify file exists
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({
-        success: false,
-        error: 'Upload file not found'
-      });
-    }
 
     console.log(`⬆️ Uploading to IPFS: ${filePath}`);
 
@@ -526,6 +678,281 @@ router.post('/tus-callback', async (req, res) => {
     });
   }
 });
+
+/**
+ * 2B. FINALIZE UPLOAD (UPLOAD-FIRST FLOW)
+ * Completes upload after TUS finishes by creating video entry
+ * Requires upload_id from /init endpoint
+ */
+router.post('/finalize',
+  authLimiter,
+  uploadLimiter,
+  requireAuth,
+  upload.single('thumbnail'),
+  [
+    body('upload_id')
+      .isLength({ min: 10 })
+      .withMessage('Valid upload_id required'),
+    body('title')
+      .isLength({ min: 5, max: 250 })
+      .trim()
+      .withMessage('Title must be 5-250 characters'),
+    body('description')
+      .isLength({ min: 1, max: 50000 })
+      .trim()
+      .withMessage('Description must be 1-50000 characters'),
+    body('tags')
+      .optional()
+      .isArray({ min: 1, max: 10 })
+      .withMessage('Tags must be an array (1-10 items)'),
+    body('permlink')
+      .optional()
+      .isLength({ min: 3, max: 255 })
+      .matches(/^[a-z0-9-]+$/)
+      .withMessage('Permlink must be lowercase alphanumeric with hyphens'),
+    body('category')
+      .optional()
+      .isIn(['general', 'news', 'vlogs', 'gaming', 'education', 'sports', 'music', 'crypto'])
+      .withMessage('Invalid category'),
+    body('language')
+      .optional()
+      .isLength({ min: 2, max: 5 })
+      .matches(/^[a-z]{2}(-[A-Z]{2})?$/)
+      .withMessage('Language must be ISO 639-1 code (e.g., "en", "es", "zh-CN")'),
+    body('beneficiaries')
+      .optional()
+      .isArray()
+      .withMessage('Beneficiaries must be an array'),
+    body('declineRewards')
+      .optional()
+      .isBoolean()
+      .withMessage('declineRewards must be boolean'),
+    body('rewardPowerup')
+      .optional()
+      .isBoolean()
+      .withMessage('rewardPowerup must be boolean')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          errors: errors.array()
+        });
+      }
+
+      const {
+        upload_id,
+        title,
+        description,
+        tags = [],
+        permlink,
+        community,
+        beneficiaries,
+        category = 'general',
+        language = 'en',
+        hive,
+        app,
+        declineRewards = false,
+        rewardPowerup = false,
+        votePercent = 1,
+        thumbnail_base64
+      } = req.body;
+
+      console.log(`🏁 Finalizing upload: ${upload_id}`);
+
+      // Find temporary upload
+      const TempUpload = require('../models/TempUpload')();
+      const tempUpload = await TempUpload.findOne({ upload_id });
+
+      if (!tempUpload) {
+        return res.status(404).json({
+          success: false,
+          error: 'Upload not found or expired'
+        });
+      }
+
+      if (tempUpload.finalized) {
+        return res.status(400).json({
+          success: false,
+          error: 'Upload already finalized',
+          video_id: tempUpload.video_id
+        });
+      }
+
+      if (!tempUpload.tus_completed) {
+        return res.status(400).json({
+          success: false,
+          error: 'TUS upload not completed yet'
+        });
+      }
+
+      if (tempUpload.isExpired()) {
+        return res.status(410).json({
+          success: false,
+          error: 'Upload expired'
+        });
+      }
+
+      const owner = tempUpload.owner;
+
+      console.log(`📝 Creating video entry for ${owner}: "${title}"`);
+
+      // Normalize community to string if it's an object
+      let communityStr = community;
+      if (community && typeof community === 'object') {
+        console.log(`📋 Extracting community name from object:`, community);
+        communityStr = community.name || community.title || null;
+        if (communityStr) {
+          console.log(`✅ Using community name: ${communityStr}`);
+        } else {
+          console.warn(`⚠️  Community object has no name/title property, setting to null`);
+          communityStr = null;
+        }
+      }
+
+      // Handle thumbnail upload (file or base64)
+      let thumbnailCid = null;
+      if (req.file) {
+        console.log(`🖼️ Uploading thumbnail file: ${req.file.originalname}`);
+        const uploadResult = await ipfsService.uploadThumbnail(req.file.path);
+        thumbnailCid = uploadResult.hash;
+        fs.unlinkSync(req.file.path);
+      } else if (thumbnail_base64) {
+        console.log('🖼️ Uploading base64 thumbnail');
+        const uploadResult = await ipfsService.uploadThumbnailBase64(thumbnail_base64);
+        thumbnailCid = uploadResult.hash;
+      }
+
+      // Create video document
+      const Video = getVideoModel();
+      const DEFAULT_THUMBNAIL = process.env.DEFAULT_THUMBNAIL || '';
+      let thumbnailValue = '';
+      if (thumbnailCid) {
+        thumbnailValue = `ipfs://${thumbnailCid}`;
+      } else if (DEFAULT_THUMBNAIL) {
+        thumbnailValue = DEFAULT_THUMBNAIL.startsWith('ipfs://')
+          ? DEFAULT_THUMBNAIL
+          : `ipfs://${DEFAULT_THUMBNAIL}`;
+      }
+
+      const videoData = {
+        owner,
+        title,
+        description,
+        permlink: permlink || `${Date.now()}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        tags_v2: Array.isArray(tags) ? tags : [tags],
+        filename: null, // Will be set after IPFS upload
+        size: tempUpload.size,
+        duration: tempUpload.duration,
+        thumbnail: thumbnailValue,
+        community: communityStr || hive || null,
+        hive: communityStr || hive || null,
+        category,
+        language,
+        status: 'encoding_queued',
+        beneficiaries: beneficiaries || [],
+        declineRewards,
+        fromMobile: false,
+        app: app || null,
+        local_filename: tempUpload.tus_file_path,
+        originalFilename: tempUpload.originalFilename,
+        created: new Date()
+      };
+
+      const video = await Video.create(videoData);
+      console.log(`✅ Video created: ${video._id} (${owner}/${video.permlink})`);
+
+      // Mark temporary upload as finalized
+      await TempUpload.markFinalized(upload_id, video._id.toString());
+
+      // Now trigger IPFS upload and job creation
+      // (This is the same logic as the TUS callback)
+      console.log(`⬆️ Uploading to IPFS: ${tempUpload.tus_file_path}`);
+
+      const uploadResult = await ipfsService.uploadFile(tempUpload.tus_file_path);
+
+      console.log(`📋 Creating encoding job...`);
+
+      const Job = getJobModel();
+      const existingJob = await Job.findOne({
+        'metadata.video_owner': owner,
+        'metadata.video_permlink': video.permlink
+      });
+
+      if (existingJob) {
+        console.log(`⚠️ Job already exists for ${owner}/${video.permlink}: ${existingJob.id}`);
+        video.job_id = existingJob.id;
+        video.filename = `ipfs://${uploadResult.hash}`;
+        await video.save();
+
+        try {
+          fs.unlinkSync(tempUpload.tus_file_path);
+          console.log(`🗑️ Cleaned up temp file: ${tempUpload.tus_file_path}`);
+        } catch (cleanupError) {
+          console.warn(`⚠️ Failed to cleanup temp file: ${cleanupError.message}`);
+        }
+
+        return res.json({
+          success: true,
+          message: 'Job already exists',
+          data: {
+            video_id: video._id,
+            job_id: existingJob.id
+          }
+        });
+      }
+
+      const jobId = await jobService.createEncodingJob(
+        video,
+        uploadResult.hash,
+        video.size,
+        uploadResult.gatewayUrl
+      );
+
+      console.log(`✅ Job created: ${jobId}`);
+
+      // Update video document
+      video.filename = `ipfs://${uploadResult.hash}`;
+      video.status = 'encoding_ipfs';
+      video.job_id = jobId;
+      video.local_filename = null;
+      video.fallback_mode = uploadResult.fallbackMode;
+      video.cleanup_eligible = false;
+
+      await video.save();
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(tempUpload.tus_file_path);
+        console.log(`🗑️ Cleaned up temp file: ${tempUpload.tus_file_path}`);
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to cleanup temp file: ${cleanupError.message}`);
+      }
+
+      console.log(`✅ Upload finalized: ${owner}/${video.permlink} → ipfs://${uploadResult.hash}`);
+
+      res.json({
+        success: true,
+        data: {
+          video_id: video._id,
+          permlink: video.permlink,
+          job_id: jobId
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Finalize upload error:', error);
+      res.status(500).json({
+        success: false,
+        error: process.env.NODE_ENV === 'production'
+          ? 'Failed to finalize upload'
+          : error.message
+      });
+    }
+  }
+);
 
 /**
  * 3. VIDEO STATUS

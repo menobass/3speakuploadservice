@@ -36,6 +36,7 @@ class CleanupService {
       console.log('🧹 Starting scheduled cleanup...');
       try {
         await this.performCleanup();
+        await this.cleanupOrphanedUploads();
       } catch (error) {
         console.error('❌ Scheduled cleanup failed:', error);
       }
@@ -188,6 +189,54 @@ class CleanupService {
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Clean up orphaned temporary uploads (upload-first flow)
+   * Removes uploads that expired without being finalized
+   * @returns {Promise<{cleaned: number, errors: number, total: number}>}
+   */
+  async cleanupOrphanedUploads() {
+    try {
+      const TempUpload = require('../models/TempUpload')();
+      const orphaned = await TempUpload.findOrphaned();
+      
+      console.log(`🔍 Found ${orphaned.length} orphaned uploads to clean`);
+      
+      if (orphaned.length === 0) {
+        return { cleaned: 0, errors: 0, total: 0 };
+      }
+
+      let cleaned = 0;
+      let errors = 0;
+      const fs = require('fs');
+
+      for (const upload of orphaned) {
+        try {
+          // Delete temp file if exists
+          if (upload.tus_file_path && fs.existsSync(upload.tus_file_path)) {
+            fs.unlinkSync(upload.tus_file_path);
+            console.log(`🗑️ Deleted orphaned file: ${upload.tus_file_path}`);
+          }
+          
+          // Delete database entry
+          await TempUpload.deleteOne({ _id: upload._id });
+          cleaned++;
+          
+          console.log(`✅ Cleaned orphaned upload: ${upload.upload_id} (${upload.owner})`);
+        } catch (error) {
+          console.error(`❌ Failed to clean upload ${upload.upload_id}:`, error.message);
+          errors++;
+        }
+      }
+
+      console.log(`✅ Orphaned upload cleanup: ${cleaned} cleaned, ${errors} errors`);
+      
+      return { cleaned, errors, total: orphaned.length };
+    } catch (error) {
+      console.error('❌ Orphaned upload cleanup error:', error);
+      throw error;
     }
   }
 
