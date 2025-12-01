@@ -1306,4 +1306,97 @@ router.post('/thumbnail/:video_id',
   }
 );
 
+// ============================================
+// GET IN-PROGRESS VIDEOS
+// ============================================
+/**
+ * Get videos currently being processed for a user
+ * Returns job IDs so frontend can poll encoding progress
+ * 
+ * Frontend use case:
+ * - User uploads video and hits "publish"
+ * - User navigates to homepage
+ * - Homepage calls /api/upload/in-progress
+ * - If videos are encoding, show progress UI with job_id polling
+ * 
+ * Query logic:
+ * - Find videos owned by user
+ * - Filter by encoding status (not published/failed yet)
+ * - Return video info + job_id for each
+ */
+router.get('/in-progress', requireAuth, async (req, res) => {
+  try {
+    const owner = req.body.owner || req.headers['x-hive-username'];
+    
+    if (!owner) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username required'
+      });
+    }
+    
+    console.log(`🔍 Checking in-progress videos for: ${owner}`);
+    
+    const Video = getVideoModel();
+    
+    // Find videos that are still being processed
+    const inProgressVideos = await Video.find({
+      owner,
+      status: {
+        $in: [
+          'uploaded',           // Just uploaded, not yet encoding
+          'encoding_ipfs',      // Currently uploading to IPFS
+          'encoding_preparing', // Encoder preparing job
+          'encoding_progress'   // Actively encoding
+        ]
+      }
+    })
+    .select('_id owner permlink title status job_id created encodingProgress')
+    .sort({ created: -1 }) // Newest first
+    .limit(10); // Reasonable limit
+    
+    if (inProgressVideos.length === 0) {
+      console.log(`✅ No videos in progress for ${owner}`);
+      return res.json({
+        success: true,
+        data: {
+          videos: [],
+          count: 0
+        }
+      });
+    }
+    
+    console.log(`📹 Found ${inProgressVideos.length} video(s) in progress for ${owner}`);
+    
+    // Format response with job IDs
+    const videosWithJobs = inProgressVideos.map(video => ({
+      video_id: video._id.toString(),
+      owner: video.owner,
+      permlink: video.permlink,
+      title: video.title,
+      status: video.status,
+      job_id: video.job_id || null,
+      encoding_progress: video.encodingProgress || 0,
+      created: video.created
+    }));
+    
+    res.json({
+      success: true,
+      data: {
+        videos: videosWithJobs,
+        count: videosWithJobs.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ In-progress check error:', error);
+    res.status(500).json({
+      success: false,
+      error: process.env.NODE_ENV === 'production' 
+        ? 'Failed to check in-progress videos'
+        : error.message
+    });
+  }
+});
+
 module.exports = router;
