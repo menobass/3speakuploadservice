@@ -75,7 +75,8 @@ app.use(cors({
       'https://video.3speak.tv',
       'https://3speak.tv', 
       'https://3speak.co',
-      'https://beta.3speak.tv'
+      'https://beta.3speak.tv',
+      'https://studio.3speak.tv'
     ];
     
     // Allow any Vercel deployment (for development/testing)
@@ -83,11 +84,17 @@ app.use(cors({
       return callback(null, true);
     }
     
+    // Allow any 3speak subdomain
+    if (origin && (origin.endsWith('.3speak.tv') || origin.endsWith('.3speak.co'))) {
+      return callback(null, true);
+    }
+    
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
     
-    // Reject other origins
+    // Log rejected origin for debugging
+    console.warn(`⚠️ CORS rejected origin: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true
