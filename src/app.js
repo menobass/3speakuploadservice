@@ -95,10 +95,38 @@ app.use(cors({
     
     // Log rejected origin for debugging
     console.warn(`⚠️ CORS rejected origin: ${origin}`);
-    callback(new Error('Not allowed by CORS'));
+    
+    // Create descriptive error with origin info
+    const error = new Error(`CORS_BLOCKED: Origin '${origin}' is not allowed. Allowed: *.3speak.tv, *.3speak.co, *.vercel.app, localhost`);
+    error.isCorsError = true;
+    error.rejectedOrigin = origin;
+    callback(error);
   },
   credentials: true
 }));
+
+// CORS error handler - must be right after cors() middleware
+app.use((err, req, res, next) => {
+  if (err.isCorsError) {
+    // Set CORS headers manually so the browser can read our error response
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    return res.status(403).json({
+      success: false,
+      error: 'CORS Error: Origin not allowed',
+      message: `Your origin '${err.rejectedOrigin}' is not in the allowed list.`,
+      allowed_patterns: [
+        '*.3speak.tv',
+        '*.3speak.co', 
+        '*.vercel.app',
+        'localhost:*'
+      ],
+      help: 'If you need access from a new domain, contact the 3Speak team.'
+    });
+  }
+  next(err);
+});
 
 // ============================================
 // RATE LIMITING
@@ -183,14 +211,93 @@ app.get('/', (req, res) => {
 // ============================================
 // ERROR HANDLING
 // ============================================
+
+// General error handler with descriptive messages
 app.use((error, req, res, next) => {
-  logger.error('Unhandled error:', error);
-  res.status(500).json({
-    success: false,
-    error: process.env.NODE_ENV === 'production' 
-      ? 'Internal server error' 
-      : error.message
+  // Log the full error for debugging
+  logger.error('Unhandled error:', {
+    message: error.message,
+    stack: error.stack,
+    url: req.url,
+    method: req.method,
+    origin: req.headers.origin,
+    ip: req.ip
   });
+  
+  // Determine error type and provide helpful message
+  let statusCode = error.statusCode || error.status || 500;
+  let errorResponse = {
+    success: false,
+    error: 'Internal server error'
+  };
+  
+  // Validation errors
+  if (error.name === 'ValidationError') {
+    statusCode = 400;
+    errorResponse = {
+      success: false,
+      error: 'Validation Error',
+      message: error.message,
+      details: error.errors || undefined
+    };
+  }
+  // MongoDB errors
+  else if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+    if (error.code === 11000) {
+      statusCode = 409;
+      errorResponse = {
+        success: false,
+        error: 'Duplicate Entry',
+        message: 'A record with this identifier already exists.'
+      };
+    } else {
+      errorResponse = {
+        success: false,
+        error: 'Database Error',
+        message: process.env.NODE_ENV === 'production' 
+          ? 'A database error occurred. Please try again.'
+          : error.message
+      };
+    }
+  }
+  // JSON parsing errors
+  else if (error.type === 'entity.parse.failed') {
+    statusCode = 400;
+    errorResponse = {
+      success: false,
+      error: 'Invalid JSON',
+      message: 'The request body contains invalid JSON.'
+    };
+  }
+  // File upload errors
+  else if (error.code === 'LIMIT_FILE_SIZE') {
+    statusCode = 413;
+    errorResponse = {
+      success: false,
+      error: 'File Too Large',
+      message: 'The uploaded file exceeds the maximum allowed size.'
+    };
+  }
+  // Authentication errors
+  else if (error.message && error.message.includes('auth')) {
+    statusCode = 401;
+    errorResponse = {
+      success: false,
+      error: 'Authentication Error',
+      message: error.message
+    };
+  }
+  // Development mode - show full error
+  else if (process.env.NODE_ENV !== 'production') {
+    errorResponse = {
+      success: false,
+      error: error.name || 'Error',
+      message: error.message,
+      stack: error.stack
+    };
+  }
+  
+  res.status(statusCode).json(errorResponse);
 });
 
 // 404 Handler
