@@ -102,7 +102,30 @@ app.use(cors({
     error.rejectedOrigin = origin;
     callback(error);
   },
-  credentials: true
+  credentials: true,
+  // Allow custom headers used by 3Speak frontend
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Hive-Username',      // Hive username for auth
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Cache-Control',
+    'Tus-Resumable',        // TUS upload protocol headers
+    'Upload-Length',
+    'Upload-Offset',
+    'Upload-Metadata'
+  ],
+  exposedHeaders: [
+    'Location',             // TUS returns upload URL in Location header
+    'Upload-Offset',
+    'Upload-Length',
+    'Tus-Resumable',
+    'Tus-Version',
+    'Tus-Extension',
+    'Tus-Max-Size'
+  ]
 }));
 
 // CORS error handler - must be right after cors() middleware
